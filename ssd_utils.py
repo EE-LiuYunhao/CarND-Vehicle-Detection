@@ -1,10 +1,15 @@
 """Some utils for SSD."""
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.utils.data as tud
+from torch.autograd import Variable
+import torch.optim
 import tensorflow as tf
 
 
-class BBoxUtility(object):
+class BBoxUtility(nn.Module):
     """Utility class to do some stuff with bounding boxes and priors.
 
     # Arguments
@@ -18,9 +23,10 @@ class BBoxUtility(object):
     # References
         https://arxiv.org/abs/1512.02325
     """
-    # TODO add setter methods for nms_thresh and top_K
+
     def __init__(self, num_classes, priors=None, overlap_threshold=0.5,
                  nms_thresh=0.45, top_k=400):
+        super(BBoxUtility, self).__init__()
         self.num_classes = num_classes
         self.priors = priors
         self.num_priors = 0 if priors is None else len(priors)

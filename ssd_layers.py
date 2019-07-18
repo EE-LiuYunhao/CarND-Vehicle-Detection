@@ -1,55 +1,45 @@
-"""Some special pupropse layers for SSD."""
-
-import keras.backend as K
-from keras.engine.topology import InputSpec
-from keras.engine.topology import Layer
 import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn as nn
+import torch.utils.data as tud
+from torch.autograd import Variable
+import torch.optim
+
+LEARNING_RATE = 1e-2
+MOMENTUM = .9
+
+def normalize_optim(network):
+    bias_p, weight_p = [],[]
+    for name, p in network.named_parameters():
+        if 'bias' in name:
+            bias_p += [p]
+        else: 
+            weight_p += [p]
+    return torch.optim.SGD([{'params': weight_p, 'weight_decay':1e-5},
+                            {'params': bias_p, 'weight_decay':0}], 
+                            lr=LEARNING_RATE, 
+                            momentum=MOMENTUM)
+"""
+As for the L2 Normalization, use the
 
 
-class Normalize(Layer):
-    """Normalization layer as described in ParseNet paper.
+torch.optim.SGD([{'params': weight_p, 'weight_decay':1e-5},
+                      {'params': bias_p, 'weight_decay':0}], 
+                      lr=1e-2, 
+                      momentum=0.9)
 
-    # Arguments
-        scale: Default feature scale.
+where the weight_p and the bias_p come from: 
+for name, p in n.named_parameters():
+    if 'bias' in name:
+        bias_p += [p]
+    else:
+        weight_p += [p]
 
-    # Input shape
-        4D tensor with shape:
-        `(samples, channels, rows, cols)` if dim_ordering='th'
-        or 4D tensor with shape:
-        `(samples, rows, cols, channels)` if dim_ordering='tf'.
-
-    # Output shape
-        Same as input
-
-    # References
-        http://cs.unc.edu/~wliu/papers/parsenet.pdf
-
-    #TODO
-        Add possibility to have one scale for all features.
-    """
-    def __init__(self, scale, **kwargs):
-        if K.image_dim_ordering() == 'tf':
-            self.axis = 3
-        else:
-            self.axis = 1
-        self.scale = scale
-        super(Normalize, self).__init__(**kwargs)
-
-    def build(self, input_shape):
-        self.input_spec = [InputSpec(shape=input_shape)]
-        shape = (input_shape[self.axis],)
-        init_gamma = self.scale * np.ones(shape)
-        self.gamma = K.variable(init_gamma, name='{}_gamma'.format(self.name))
-        self.trainable_weights = [self.gamma]
-
-    def call(self, x, mask=None):
-        output = K.l2_normalize(x, self.axis)
-        output *= self.gamma
-        return output
+as the optimizer
+"""
 
 
-class PriorBox(Layer):
+class PriorBox(nn.Module):
     """Generate the prior boxes of designated sizes and aspect ratios.
 
     # Arguments
@@ -64,9 +54,7 @@ class PriorBox(Layer):
 
     # Input shape
         4D tensor with shape:
-        `(samples, channels, rows, cols)` if dim_ordering='th'
-        or 4D tensor with shape:
-        `(samples, rows, cols, channels)` if dim_ordering='tf'.
+        `(samples, channels, rows, cols)`
 
     # Output shape
         3D tensor with shape:
@@ -77,16 +65,12 @@ class PriorBox(Layer):
 
     #TODO
         Add possibility not to have variances.
-        Add Theano support
     """
     def __init__(self, img_size, min_size, max_size=None, aspect_ratios=None,
                  flip=True, variances=[0.1], clip=True, **kwargs):
-        if K.image_dim_ordering() == 'tf':
-            self.waxis = 2
-            self.haxis = 1
-        else:
-            self.waxis = 3
-            self.haxis = 2
+        super(PriorBox, self).__init__(**kwargs)
+        self.waxis = 3
+        self.haxis = 2
         self.img_size = img_size
         if min_size <= 0:
             raise Exception('min_size must be positive.')
@@ -106,7 +90,6 @@ class PriorBox(Layer):
                     self.aspect_ratios.append(1.0 / ar)
         self.variances = np.array(variances)
         self.clip = True
-        super(PriorBox, self).__init__(**kwargs)
 
     def get_output_shape_for(self, input_shape):
         num_priors_ = len(self.aspect_ratios)
@@ -115,13 +98,9 @@ class PriorBox(Layer):
         num_boxes = num_priors_ * layer_width * layer_height
         return (input_shape[0], num_boxes, 8)
 
-    def call(self, x, mask=None):
-        if hasattr(x, '_keras_shape'):
-            input_shape = x._keras_shape
-        elif hasattr(K, 'int_shape'):
-            input_shape = K.int_shape(x)
-        layer_width = input_shape[self.waxis]
-        layer_height = input_shape[self.haxis]
+    def forward(self, x, mask=None):
+        layer_width = x.size()[self.waxis]
+        layer_height = x.size()[self.haxis]
         img_width = self.img_size[0]
         img_height = self.img_size[1]
         # define prior boxes shapes
@@ -170,12 +149,6 @@ class PriorBox(Layer):
             variances = np.tile(self.variances, (num_boxes, 1))
         else:
             raise Exception('Must provide one or four variances.')
-        prior_boxes = np.concatenate((prior_boxes, variances), axis=1)
-        prior_boxes_tensor = K.expand_dims(K.variable(prior_boxes), 0)
-        if K.backend() == 'tensorflow':
-            pattern = [tf.shape(x)[0], 1, 1]
-            prior_boxes_tensor = tf.tile(prior_boxes_tensor, pattern)
-        elif K.backend() == 'theano':
-            #TODO
-            pass
+        prior_boxes_tensor = torch.unsqueeze(torch.FloatTensor(np.concatenate((prior_boxes, variances), axis=1)), 0)
+        prior_boxes_tensor = prior_boxes_tensor.repeat([x.size[0], 1, 1])
         return prior_boxes_tensor
